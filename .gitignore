@@ -50,4 +50,7 @@ coverage
 # Solana specific
 .anchor
 target/
-test-ledger/ 
+test-ledger/
+
+# Position tracking
+positions.json 

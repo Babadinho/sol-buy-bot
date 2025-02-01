@@ -32,6 +32,10 @@ class TradingService {
         return `❌ Route Error: ${route.msg || 'Failed to get route'}`;
       }
 
+      // Store the expected output amount
+      const outAmount = route.data.quote.outAmount;
+      console.log('Expected output amount:', outAmount);
+
       // Step 2: Sign transaction
       console.log('Signing transaction...');
       const swapTransactionBuf = Buffer.from(
@@ -77,11 +81,12 @@ class TradingService {
         const status = await statusResponse.json();
 
         if (status.data.success === true) {
-          // Save position after successful buy
+          // Save position after successful buy with token quantity
           const positions = loadPositions();
           positions[mint] = {
             timestamp: Date.now(),
             txHash: hash,
+            tokenAmount: outAmount, // Store the token quantity
           };
           savePositions(positions);
 
@@ -106,18 +111,30 @@ class TradingService {
 
   async sellToken(mint, percentage) {
     try {
-      // Step 1: Get quote and unsigned transaction
+      // Get the stored position to calculate the sell amount
+      const positions = loadPositions();
+      const position = positions[mint];
+
+      if (!position || !position.tokenAmount) {
+        return `❌ Error: No position found for this token or token amount not stored`;
+      }
+
+      // Calculate the amount to sell based on percentage
+      const sellAmount = Math.floor(
+        (Number(position.tokenAmount) * percentage) / 100
+      ).toString();
+
       const quoteUrl =
         `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?` +
         `token_in_address=${mint}&` +
         `token_out_address=${SOL_TOKEN}&` +
         `from_address=${process.env.WALLET_PUBLIC_KEY}&` +
         `slippage=${process.env.SLIPPAGE || 1}&` +
-        `amount=${percentage}&` +
+        `in_amount=${sellAmount}&` + // Use calculated amount instead of percentage
         `fee=${process.env.PRIORITY_FEE || 0.006}`;
 
       console.log('Getting sell quote...');
-      console.log('Quote URL:', quoteUrl); // Debug log
+      console.log('Quote URL:', quoteUrl);
 
       const routeResponse = await fetch(quoteUrl);
       const route = await routeResponse.json();

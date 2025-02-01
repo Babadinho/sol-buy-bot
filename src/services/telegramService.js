@@ -73,10 +73,17 @@ Pool: ${process.env.POOL}
     }
 
     for (const [mint, data] of Object.entries(positions)) {
+      const actualAmount = data.tokenAmount
+        ? (Number(data.tokenAmount) / 1e9).toLocaleString(undefined, {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 9,
+          })
+        : 'Unknown';
+
       const message = `
-🪙 Token: ${mint}
-📅 Bought: ${new Date(data.timestamp).toLocaleString()}
-🔗 TX: ${data.txHash}
+🪙 Token: ${data.tokenName || mint}
+💰 Amount: ${actualAmount} tokens
+📅 Last bought: ${new Date(data.timestamp).toLocaleString()}
 `;
 
       const keyboard = {

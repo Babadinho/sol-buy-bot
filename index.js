@@ -13,7 +13,7 @@ const walletKeypair = Keypair.fromSecretKey(
 );
 
 // Initialize services
-const tradingService = new TradingService(connection, walletKeypair);
+const tradingService = new TradingService(connection);
 const telegramService = new TelegramService(
   process.env.TELEGRAM_BOT_TOKEN,
   tradingService

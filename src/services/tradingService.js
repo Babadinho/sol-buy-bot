@@ -1,60 +1,103 @@
-const { VersionedTransaction } = require('@solana/web3.js');
+const { VersionedTransaction, Keypair } = require('@solana/web3.js');
 const { loadPositions, savePositions } = require('../utils/helpers');
+const bs58 = require('bs58');
+
+const API_HOST = 'https://gmgn.ai';
+const SOL_TOKEN = 'So11111111111111111111111111111111111111112';
 
 class TradingService {
-  constructor(connection, walletKeypair) {
+  constructor(connection) {
     this.connection = connection;
-    this.walletKeypair = walletKeypair;
   }
 
   async buyToken(mint) {
     try {
-      const requestBody = {
-        publicKey: this.walletKeypair.publicKey.toString(),
-        action: 'buy',
-        mint: mint,
-        denominatedInSol: 'true',
-        amount: Number(process.env.AMOUNT),
-        slippage: Number(process.env.SLIPPAGE || 10),
-        priorityFee: Number(process.env.PRIORITY_FEE || 0.00001),
-        pool: 'pump',
-      };
+      // Step 1: Get quote and unsigned transaction
+      const amount = (Number(process.env.AMOUNT) * 1e9).toString(); // Convert SOL to lamports
+      const quoteUrl =
+        `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?` +
+        `token_in_address=${SOL_TOKEN}&` +
+        `token_out_address=${mint}&` +
+        `in_amount=${amount}&` +
+        `from_address=${process.env.WALLET_PUBLIC_KEY}&` +
+        `slippage=${process.env.SLIPPAGE || 1}&` +
+        `fee=${process.env.PRIORITY_FEE || 0.006}`;
 
-      const response = await fetch('https://pumpportal.fun/api/trade-local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+      console.log('Getting quote...');
+      const routeResponse = await fetch(quoteUrl);
+      const route = await routeResponse.json();
 
-      if (response.status === 200) {
-        const data = await response.arrayBuffer();
-        let tx = VersionedTransaction.deserialize(new Uint8Array(data));
-        tx.sign([this.walletKeypair]);
-        const signature = await this.connection.sendTransaction(tx);
-
-        const confirmation = await this.connection.confirmTransaction(
-          signature,
-          'confirmed'
-        );
-        if (confirmation.value.err) {
-          return `❌ Transaction failed: ${JSON.stringify(
-            confirmation.value.err
-          )}`;
-        }
-
-        // Save position after successful buy
-        const positions = loadPositions();
-        positions[mint] = {
-          timestamp: Date.now(),
-          txHash: signature,
-        };
-        savePositions(positions);
-
-        return `✅ Buy transaction sent! View at: https://solscan.io/tx/${signature}`;
+      if (routeResponse.status !== 200) {
+        console.log('Route Error Response:', route);
+        return `❌ Route Error: ${route.msg || 'Failed to get route'}`;
       }
 
-      const errorText = await response.text();
-      return `❌ API Error: ${response.status} - ${errorText}`;
+      // Step 2: Sign transaction
+      console.log('Signing transaction...');
+      const swapTransactionBuf = Buffer.from(
+        route.data.raw_tx.swapTransaction,
+        'base64'
+      );
+      const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+
+      const signerKeyPair = Keypair.fromSecretKey(
+        Buffer.from(bs58.decode(process.env.WALLET_PRIVATE_KEY))
+      );
+
+      transaction.sign([signerKeyPair]);
+      const signedTx = Buffer.from(transaction.serialize()).toString('base64');
+
+      // Step 3: Submit transaction
+      console.log('Submitting transaction...');
+      const submitResponse = await fetch(
+        `${API_HOST}/defi/router/v1/sol/tx/submit_signed_transaction`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signed_tx: signedTx }),
+        }
+      );
+
+      const submitResult = await submitResponse.json();
+      if (submitResponse.status !== 200) {
+        console.log('Submit Error Response:', submitResult);
+        return `❌ Submit Error: ${
+          submitResult.msg || 'Failed to submit transaction'
+        }`;
+      }
+
+      // Step 4: Wait for confirmation
+      console.log('Waiting for confirmation...');
+      const hash = submitResult.data.hash;
+      const lastValidBlockHeight = route.data.raw_tx.lastValidBlockHeight;
+
+      while (true) {
+        const statusUrl = `${API_HOST}/defi/router/v1/sol/tx/get_transaction_status?hash=${hash}&last_valid_height=${lastValidBlockHeight}`;
+        const statusResponse = await fetch(statusUrl);
+        const status = await statusResponse.json();
+
+        if (status.data.success === true) {
+          // Save position after successful buy
+          const positions = loadPositions();
+          positions[mint] = {
+            timestamp: Date.now(),
+            txHash: hash,
+          };
+          savePositions(positions);
+
+          return `✅ Buy transaction successful! View at: https://solscan.io/tx/${hash}`;
+        }
+
+        if (status.data.expired === true) {
+          return `❌ Transaction expired. Please try again.`;
+        }
+
+        if (status.data.failed === true) {
+          return `❌ Transaction failed on chain.`;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
     } catch (error) {
       console.log('Full error:', error);
       return `❌ Error: ${error.message}`;
@@ -63,33 +106,92 @@ class TradingService {
 
   async sellToken(mint, percentage) {
     try {
-      const requestBody = {
-        publicKey: this.walletKeypair.publicKey.toString(),
-        action: 'sell',
-        mint: mint,
-        denominatedInSol: 'false',
-        amount: `${percentage}%`,
-        slippage: Number(process.env.SLIPPAGE),
-        priorityFee: Number(process.env.PRIORITY_FEE),
-        pool: 'pump',
-      };
+      // Step 1: Get quote and unsigned transaction
+      const quoteUrl =
+        `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?` +
+        `token_in_address=${mint}&` +
+        `token_out_address=${SOL_TOKEN}&` +
+        `from_address=${process.env.WALLET_PUBLIC_KEY}&` +
+        `slippage=${process.env.SLIPPAGE || 1}&` +
+        `amount=${percentage}&` +
+        `fee=${process.env.PRIORITY_FEE || 0.006}`;
 
-      const response = await fetch('https://pumpportal.fun/api/trade-local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+      console.log('Getting sell quote...');
+      console.log('Quote URL:', quoteUrl); // Debug log
 
-      if (response.status === 200) {
-        const data = await response.arrayBuffer();
-        let tx = VersionedTransaction.deserialize(new Uint8Array(data));
-        tx.sign([this.walletKeypair]);
-        const signature = await this.connection.sendTransaction(tx);
-        return `✅ Sell transaction sent! View at: https://solscan.io/tx/${signature}`;
+      const routeResponse = await fetch(quoteUrl);
+      const route = await routeResponse.json();
+
+      if (routeResponse.status !== 200) {
+        console.log('Route Error Response:', route);
+        return `❌ Route Error: ${route.msg || 'Failed to get route'}`;
       }
 
-      const errorText = await response.text();
-      return `❌ API Error: ${response.status} - ${errorText}`;
+      // Step 2: Sign transaction
+      console.log('Signing transaction...');
+      const swapTransactionBuf = Buffer.from(
+        route.data.raw_tx.swapTransaction,
+        'base64'
+      );
+      const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
+
+      const signerKeyPair = Keypair.fromSecretKey(
+        Buffer.from(bs58.decode(process.env.WALLET_PRIVATE_KEY))
+      );
+
+      transaction.sign([signerKeyPair]);
+      const signedTx = Buffer.from(transaction.serialize()).toString('base64');
+
+      // Step 3: Submit transaction
+      console.log('Submitting sell transaction...');
+      const submitResponse = await fetch(
+        `${API_HOST}/defi/router/v1/sol/tx/submit_signed_transaction`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ signed_tx: signedTx }),
+        }
+      );
+
+      const submitResult = await submitResponse.json();
+      if (submitResponse.status !== 200) {
+        console.log('Submit Error Response:', submitResult);
+        return `❌ Submit Error: ${
+          submitResult.msg || 'Failed to submit transaction'
+        }`;
+      }
+
+      // Step 4: Wait for confirmation
+      console.log('Waiting for confirmation...');
+      const hash = submitResult.data.hash;
+      const lastValidBlockHeight = route.data.raw_tx.lastValidBlockHeight;
+
+      while (true) {
+        const statusUrl = `${API_HOST}/defi/router/v1/sol/tx/get_transaction_status?hash=${hash}&last_valid_height=${lastValidBlockHeight}`;
+        const statusResponse = await fetch(statusUrl);
+        const status = await statusResponse.json();
+
+        if (status.data.success === true) {
+          // Remove position if selling 100%
+          if (percentage === 100) {
+            const positions = loadPositions();
+            delete positions[mint];
+            savePositions(positions);
+          }
+
+          return `✅ Sell transaction successful! View at: https://solscan.io/tx/${hash}`;
+        }
+
+        if (status.data.expired === true) {
+          return `❌ Transaction expired. Please try again.`;
+        }
+
+        if (status.data.failed === true) {
+          return `❌ Transaction failed on chain.`;
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
     } catch (error) {
       console.log('Full error:', error);
       return `❌ Error: ${error.message}`;

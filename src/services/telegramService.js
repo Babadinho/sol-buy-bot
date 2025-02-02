@@ -2,21 +2,84 @@ const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const bs58 = require('bs58');
 const { loadPositions, savePositions } = require('../utils/helpers');
+const { loadConfig, saveConfig } = require('../utils/config');
 
 class TelegramService {
+  static instance = null;
+
   constructor(token, tradingService) {
-    this.bot = new TelegramBot(token, { polling: true });
+    if (TelegramService.instance) {
+      return TelegramService.instance;
+    }
+
+    this.bot = new TelegramBot(token, {
+      polling: {
+        // Only process messages received after bot startup
+        offset: -1,
+        // Ignore messages older than current timestamp
+        timeout: 0,
+      },
+    });
     this.tradingService = tradingService;
+    this.startupTime = Date.now();
     this.setupCommands();
+
+    TelegramService.instance = this;
   }
 
   setupCommands() {
-    this.bot.onText(/\/start/, this.handleStart.bind(this));
-    this.bot.onText(/\/help/, this.handleHelp.bind(this));
-    this.bot.onText(/\/settings/, this.handleSettings.bind(this));
-    this.bot.onText(/\/positions/, this.handlePositions.bind(this));
-    this.bot.on('callback_query', this.handleCallbackQuery.bind(this));
-    this.bot.on('message', this.handleMessage.bind(this));
+    this.bot.removeAllListeners();
+
+    // Add timestamp check to all message handlers
+    const withTimestampCheck = (handler) => {
+      return (msg, ...args) => {
+        // Ignore messages from before bot startup
+        if (msg.date * 1000 < this.startupTime) {
+          return;
+        }
+        return handler(msg, ...args);
+      };
+    };
+
+    // Wrap all handlers with timestamp check
+    this.bot.onText(
+      /^\/start$/,
+      withTimestampCheck(this.handleStart.bind(this))
+    );
+    this.bot.onText(/^\/help$/, withTimestampCheck(this.handleHelp.bind(this)));
+    this.bot.onText(
+      /^\/settings$/,
+      withTimestampCheck(this.handleSettings.bind(this))
+    );
+    this.bot.onText(
+      /^\/setamount\s+(\d*\.?\d+)$/,
+      withTimestampCheck(this.handleSetAmount.bind(this))
+    );
+    this.bot.onText(
+      /^\/setslippage\s+(\d*\.?\d+)$/,
+      withTimestampCheck(this.handleSetSlippage.bind(this))
+    );
+    this.bot.onText(
+      /^\/setfee\s+(\d*\.?\d+)$/,
+      withTimestampCheck(this.handleSetFee.bind(this))
+    );
+    this.bot.onText(
+      /^\/positions$/,
+      withTimestampCheck(this.handlePositions.bind(this))
+    );
+    this.bot.on(
+      'callback_query',
+      withTimestampCheck(this.handleCallbackQuery.bind(this))
+    );
+    this.bot.on('message', withTimestampCheck(this.handleMessage.bind(this)));
+  }
+
+  destroy() {
+    if (this.bot) {
+      this.bot.removeAllListeners();
+      this.bot.stopPolling();
+    }
+    TelegramService.instance = null;
   }
 
   async handleStart(msg) {
@@ -52,15 +115,76 @@ Simply paste the token's contract address (44 characters)
 
   async handleSettings(msg) {
     const chatId = msg.chat.id;
-    const message = `
-⚙️ Current Trading Settings:
+    const settings = loadConfig();
 
-Amount: ${process.env.AMOUNT} SOL
-Slippage: ${process.env.SLIPPAGE}%
-Priority Fee: ${process.env.PRIORITY_FEE} SOL
-Pool: ${process.env.POOL}
-`;
+    const message = `⚙️ Current Settings:
+💰 Buy Amount: ${settings.AMOUNT} SOL
+📊 Slippage: ${settings.SLIPPAGE}%
+💨 Priority Fee: ${settings.PRIORITY_FEE} SOL
+
+To update settings, use:
+/setamount <value> - Set buy amount in SOL
+/setslippage <value> - Set slippage in %
+/setfee <value> - Set priority fee in SOL`;
+
     this.bot.sendMessage(chatId, message);
+  }
+
+  async handleSetAmount(msg, match) {
+    const chatId = msg.chat.id;
+    const amount = match[1];
+
+    if (isNaN(amount) || Number(amount) <= 0) {
+      this.bot.sendMessage(
+        chatId,
+        '❌ Please provide a valid amount (e.g., /setamount 0.1)'
+      );
+      return;
+    }
+
+    if (saveConfig({ AMOUNT: amount })) {
+      this.bot.sendMessage(chatId, `✅ Buy amount updated to ${amount} SOL`);
+    } else {
+      this.bot.sendMessage(chatId, '❌ Failed to update settings');
+    }
+  }
+
+  async handleSetSlippage(msg, match) {
+    const chatId = msg.chat.id;
+    const slippage = match[1];
+
+    if (isNaN(slippage) || Number(slippage) <= 0) {
+      this.bot.sendMessage(
+        chatId,
+        '❌ Please provide a valid slippage percentage (e.g., /setslippage 1)'
+      );
+      return;
+    }
+
+    if (saveConfig({ SLIPPAGE: slippage })) {
+      this.bot.sendMessage(chatId, `✅ Slippage updated to ${slippage}%`);
+    } else {
+      this.bot.sendMessage(chatId, '❌ Failed to update settings');
+    }
+  }
+
+  async handleSetFee(msg, match) {
+    const chatId = msg.chat.id;
+    const fee = match[1];
+
+    if (isNaN(fee) || Number(fee) <= 0) {
+      this.bot.sendMessage(
+        chatId,
+        '❌ Please provide a valid priority fee (e.g., /setfee 0.006)'
+      );
+      return;
+    }
+
+    if (saveConfig({ PRIORITY_FEE: fee })) {
+      this.bot.sendMessage(chatId, `✅ Priority fee updated to ${fee} SOL`);
+    } else {
+      this.bot.sendMessage(chatId, '❌ Failed to update settings');
+    }
   }
 
   async handlePositions(msg) {
@@ -121,7 +245,6 @@ Pool: ${process.env.POOL}
       );
       this.bot.sendMessage(query.message.chat.id, result);
 
-      // If sold 100%, remove from positions
       if (percentage === '100') {
         const positions = loadPositions();
         delete positions[mint];
@@ -141,12 +264,10 @@ Pool: ${process.env.POOL}
   async handleMessage(msg) {
     const chatId = msg.chat.id;
 
-    // Skip if it's a command
     if (msg.text && msg.text.startsWith('/')) {
       return;
     }
 
-    // Check if the message is a contract address
     if (msg.text && this.isValidSolanaAddress(msg.text)) {
       this.bot.sendMessage(chatId, '🚀 Processing buy order...');
       const result = await this.tradingService.buyToken(msg.text);
@@ -168,5 +289,21 @@ Pool: ${process.env.POOL}
     }
   }
 }
+
+TelegramService.cleanup = () => {
+  if (TelegramService.instance) {
+    TelegramService.instance.destroy();
+  }
+};
+
+process.on('SIGINT', () => {
+  TelegramService.cleanup();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  TelegramService.cleanup();
+  process.exit(0);
+});
 
 module.exports = TelegramService;

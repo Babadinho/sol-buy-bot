@@ -212,7 +212,7 @@ To change settings, use these commands:
 
       const message = `
 🪙 Token: ${data.symbol}
-📝 CA: ${mint}
+📝 CA: <code>${mint}</code>
 💰 Balance: ${actualAmount} tokens
 📅 Last transaction: ${new Date(data.timestamp).toLocaleString()}
 `;

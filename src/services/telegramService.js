@@ -83,7 +83,7 @@ Pool: ${process.env.POOL}
       const message = `
 🪙 Token: ${data.tokenName || mint}
 💰 Amount: ${actualAmount} tokens
-📅 Last bought: ${new Date(data.timestamp).toLocaleString()}
+📅 Last transaction: ${new Date(data.timestamp).toLocaleString()}
 `;
 
       const keyboard = {

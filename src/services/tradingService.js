@@ -1,6 +1,8 @@
 const { VersionedTransaction, Keypair } = require('@solana/web3.js');
 const { loadPositions, savePositions } = require('../utils/helpers');
 const bs58 = require('bs58');
+const { Connection, PublicKey } = require('@solana/web3.js');
+const { getAssociatedTokenAddress } = require('@solana/spl-token');
 
 const API_HOST = 'https://gmgn.ai';
 const SOL_TOKEN = 'So11111111111111111111111111111111111111112';
@@ -13,7 +15,7 @@ class TradingService {
   async buyToken(mint) {
     try {
       // Step 1: Get quote and unsigned transaction
-      const amount = (Number(process.env.AMOUNT) * 1e9).toString(); // Convert SOL to lamports
+      const amount = (Number(process.env.AMOUNT) * 1e9).toString();
       const quoteUrl =
         `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?` +
         `token_in_address=${SOL_TOKEN}&` +
@@ -27,14 +29,14 @@ class TradingService {
       const routeResponse = await fetch(quoteUrl);
       const route = await routeResponse.json();
 
-      if (routeResponse.status !== 200) {
-        console.log('Route Error Response:', route);
-        return `❌ Route Error: ${route.msg || 'Failed to get route'}`;
+      if (!route.data?.quote) {
+        return `❌ Invalid route response: ${route.msg || 'No quote data'}`;
       }
 
-      // Store the expected output amount
       const outAmount = route.data.quote.outAmount;
-      console.log('Expected output amount:', outAmount);
+      if (!outAmount) {
+        return '❌ Failed to get output amount from quote';
+      }
 
       // Step 2: Sign transaction
       console.log('Signing transaction...');
@@ -43,11 +45,9 @@ class TradingService {
         'base64'
       );
       const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-
       const signerKeyPair = Keypair.fromSecretKey(
         Buffer.from(bs58.decode(process.env.WALLET_PRIVATE_KEY))
       );
-
       transaction.sign([signerKeyPair]);
       const signedTx = Buffer.from(transaction.serialize()).toString('base64');
 
@@ -64,7 +64,6 @@ class TradingService {
 
       const submitResult = await submitResponse.json();
       if (submitResponse.status !== 200) {
-        console.log('Submit Error Response:', submitResult);
         return `❌ Submit Error: ${
           submitResult.msg || 'Failed to submit transaction'
         }`;
@@ -81,15 +80,19 @@ class TradingService {
         const status = await statusResponse.json();
 
         if (status.data.success === true) {
-          // Save position after successful buy with token quantity
           const positions = loadPositions();
+          const existingAmount = positions[mint]?.tokenAmount || '0';
+          const metadata = await this.getTokenMetadata(mint);
           positions[mint] = {
             timestamp: Date.now(),
             txHash: hash,
-            tokenAmount: outAmount, // Store the token quantity
+            tokenAmount: (
+              BigInt(existingAmount) + BigInt(outAmount)
+            ).toString(),
+            symbol: metadata.symbol,
+            name: metadata.name,
           };
           savePositions(positions);
-
           return `✅ Buy transaction successful! View at: https://solscan.io/tx/${hash}`;
         }
 
@@ -104,44 +107,58 @@ class TradingService {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
-      console.log('Full error:', error);
+      console.log('Error:', error.message);
       return `❌ Error: ${error.message}`;
     }
   }
 
   async sellToken(mint, percentage) {
     try {
-      // Get the stored position to calculate the sell amount
       const positions = loadPositions();
-      const position = positions[mint];
-
-      if (!position || !position.tokenAmount) {
-        return `❌ Error: No position found for this token or token amount not stored`;
+      if (!positions[mint]) {
+        return '❌ No position found for this token';
       }
 
-      // Calculate the amount to sell based on percentage
-      const sellAmount = Math.floor(
-        (Number(position.tokenAmount) * percentage) / 100
+      const connection = new Connection(process.env.RPC_ENDPOINT);
+      const tokenAccount = await getAssociatedTokenAddress(
+        new PublicKey(mint),
+        new PublicKey(process.env.WALLET_PUBLIC_KEY)
+      );
+
+      const tokenBalance = await connection.getTokenAccountBalance(
+        tokenAccount
+      );
+      const totalAmount = tokenBalance.value.amount;
+      const sellAmount = (
+        (BigInt(totalAmount) * BigInt(percentage)) /
+        BigInt(100)
       ).toString();
 
+      if (BigInt(sellAmount) <= BigInt(0)) {
+        return '❌ Invalid sell amount calculated';
+      }
+
+      // Step 1: Get quote and unsigned transaction
+      console.log('Getting quote...');
       const quoteUrl =
         `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?` +
         `token_in_address=${mint}&` +
         `token_out_address=${SOL_TOKEN}&` +
+        `in_amount=${sellAmount}&` +
         `from_address=${process.env.WALLET_PUBLIC_KEY}&` +
         `slippage=${process.env.SLIPPAGE || 1}&` +
-        `in_amount=${sellAmount}&` + // Use calculated amount instead of percentage
         `fee=${process.env.PRIORITY_FEE || 0.006}`;
-
-      console.log('Getting sell quote...');
-      console.log('Quote URL:', quoteUrl);
 
       const routeResponse = await fetch(quoteUrl);
       const route = await routeResponse.json();
 
-      if (routeResponse.status !== 200) {
-        console.log('Route Error Response:', route);
-        return `❌ Route Error: ${route.msg || 'Failed to get route'}`;
+      if (!route.data?.quote) {
+        return `❌ Invalid route response: ${route.msg || 'No quote data'}`;
+      }
+
+      const outAmount = route.data.quote.outAmount;
+      if (!outAmount) {
+        return '❌ Failed to get output amount from quote';
       }
 
       // Step 2: Sign transaction
@@ -151,16 +168,14 @@ class TradingService {
         'base64'
       );
       const transaction = VersionedTransaction.deserialize(swapTransactionBuf);
-
       const signerKeyPair = Keypair.fromSecretKey(
         Buffer.from(bs58.decode(process.env.WALLET_PRIVATE_KEY))
       );
-
       transaction.sign([signerKeyPair]);
       const signedTx = Buffer.from(transaction.serialize()).toString('base64');
 
       // Step 3: Submit transaction
-      console.log('Submitting sell transaction...');
+      console.log('Submitting transaction...');
       const submitResponse = await fetch(
         `${API_HOST}/defi/router/v1/sol/tx/submit_signed_transaction`,
         {
@@ -172,7 +187,6 @@ class TradingService {
 
       const submitResult = await submitResponse.json();
       if (submitResponse.status !== 200) {
-        console.log('Submit Error Response:', submitResult);
         return `❌ Submit Error: ${
           submitResult.msg || 'Failed to submit transaction'
         }`;
@@ -189,13 +203,23 @@ class TradingService {
         const status = await statusResponse.json();
 
         if (status.data.success === true) {
-          // Remove position if selling 100%
-          if (percentage === 100) {
-            const positions = loadPositions();
+          if (BigInt(percentage) === BigInt(100)) {
             delete positions[mint];
-            savePositions(positions);
+          } else {
+            const remainingAmount = (
+              BigInt(totalAmount) - BigInt(sellAmount)
+            ).toString();
+            const metadata = await this.getTokenMetadata(mint);
+            positions[mint] = {
+              ...positions[mint],
+              timestamp: Date.now(),
+              txHash: hash,
+              tokenAmount: remainingAmount,
+              symbol: metadata.symbol,
+              name: metadata.name,
+            };
           }
-
+          savePositions(positions);
           return `✅ Sell transaction successful! View at: https://solscan.io/tx/${hash}`;
         }
 
@@ -210,8 +234,62 @@ class TradingService {
         await new Promise((resolve) => setTimeout(resolve, 1000));
       }
     } catch (error) {
-      console.log('Full error:', error);
+      console.log('Error:', error.message);
       return `❌ Error: ${error.message}`;
+    }
+  }
+
+  async getTokenMetadata(mint) {
+    try {
+      const requestOptions = {
+        method: 'GET',
+        headers: {
+          token: process.env.SOLSCAN_API_KEY,
+          Accept: 'application/json',
+        },
+      };
+
+      const solscanResponse = await fetch(
+        `https://pro-api.solscan.io/v2.0/token/meta?address=${mint}`,
+        requestOptions
+      );
+
+      if (solscanResponse.ok) {
+        const data = await solscanResponse.json();
+        if (data && data.data) {
+          return {
+            symbol: data.data.symbol || 'Unknown',
+            name: data.data.name || 'Unknown Token',
+          };
+        }
+      } else {
+        console.log('Solscan API error:', await solscanResponse.text());
+      }
+
+      // Fallback to hardcoded values for known tokens
+      if (mint === '7kJejVVe6wRj1RiLTjZM54dNxTY1DPV6iE89VzN7pump') {
+        return {
+          symbol: 'PUMP',
+          name: 'PUMP Token',
+        };
+      }
+
+      return {
+        symbol: 'Unknown',
+        name: 'Unknown Token',
+      };
+    } catch (error) {
+      console.log('Error fetching token metadata:', error);
+      if (mint === '7kJejVVe6wRj1RiLTjZM54dNxTY1DPV6iE89VzN7pump') {
+        return {
+          symbol: 'PUMP',
+          name: 'PUMP Token',
+        };
+      }
+      return {
+        symbol: 'Unknown',
+        name: 'Unknown Token',
+      };
     }
   }
 }

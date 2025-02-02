@@ -1,12 +1,13 @@
 const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
 const bs58 = require('bs58');
 const { loadPositions, savePositions } = require('../utils/helpers');
+const SettingsService = require('./settingsService');
 
 class TelegramService {
   constructor(token, tradingService) {
     this.bot = new TelegramBot(token, { polling: true });
     this.tradingService = tradingService;
+    this.settingsService = new SettingsService();
     this.setupCommands();
   }
 
@@ -15,6 +16,16 @@ class TelegramService {
     this.bot.onText(/\/help/, this.handleHelp.bind(this));
     this.bot.onText(/\/settings/, this.handleSettings.bind(this));
     this.bot.onText(/\/positions/, this.handlePositions.bind(this));
+    this.bot.onText(
+      /\/setamount\s+(\d*\.?\d*)/,
+      this.handleSetAmount.bind(this)
+    );
+    this.bot.onText(
+      /\/setslippage\s+(\d*\.?\d*)/,
+      this.handleSetSlippage.bind(this)
+    );
+    this.bot.onText(/\/setfee\s+(\d*\.?\d*)/, this.handleSetFee.bind(this));
+    this.bot.onText(/\/setpool\s+(\w+)/, this.handleSetPool.bind(this));
     this.bot.on('callback_query', this.handleCallbackQuery.bind(this));
     this.bot.on('message', this.handleMessage.bind(this));
   }
@@ -52,15 +63,88 @@ Simply paste the token's contract address (44 characters)
 
   async handleSettings(msg) {
     const chatId = msg.chat.id;
+    const settings = await this.settingsService.getAllSettings();
+
     const message = `
 ⚙️ Current Trading Settings:
 
-Amount: ${process.env.AMOUNT} SOL
-Slippage: ${process.env.SLIPPAGE}%
-Priority Fee: ${process.env.PRIORITY_FEE} SOL
-Pool: ${process.env.POOL}
+Amount: ${settings.amount} SOL
+Slippage: ${settings.slippage}%
+Priority Fee: ${settings.priority_fee} SOL
+Pool: ${settings.pool}
+
+To change settings, use these commands:
+/setamount <value> - Set trading amount in SOL
+/setslippage <value> - Set slippage percentage
+/setfee <value> - Set priority fee in SOL
+/setpool <name> - Set pool name
 `;
     this.bot.sendMessage(chatId, message);
+  }
+
+  async handleSetAmount(msg, match) {
+    const chatId = msg.chat.id;
+    const amount = parseFloat(match[1]);
+
+    if (isNaN(amount) || amount <= 0) {
+      this.bot.sendMessage(
+        chatId,
+        '❌ Please provide a valid positive number for amount'
+      );
+      return;
+    }
+
+    await this.settingsService.updateSetting('amount', amount.toString());
+    this.bot.sendMessage(chatId, `✅ Trading amount updated to ${amount} SOL`);
+  }
+
+  async handleSetSlippage(msg, match) {
+    const chatId = msg.chat.id;
+    const slippage = parseFloat(match[1]);
+
+    if (isNaN(slippage) || slippage <= 0 || slippage > 100) {
+      this.bot.sendMessage(
+        chatId,
+        '❌ Please provide a valid slippage percentage between 0 and 100'
+      );
+      return;
+    }
+
+    await this.settingsService.updateSetting('slippage', slippage.toString());
+    this.bot.sendMessage(chatId, `✅ Slippage updated to ${slippage}%`);
+  }
+
+  async handleSetFee(msg, match) {
+    const chatId = msg.chat.id;
+    const fee = parseFloat(match[1]);
+
+    if (isNaN(fee) || fee <= 0) {
+      this.bot.sendMessage(
+        chatId,
+        '❌ Please provide a valid positive number for priority fee'
+      );
+      return;
+    }
+
+    await this.settingsService.updateSetting('priority_fee', fee.toString());
+    this.bot.sendMessage(chatId, `✅ Priority fee updated to ${fee} SOL`);
+  }
+
+  async handleSetPool(msg, match) {
+    const chatId = msg.chat.id;
+    const pool = match[1].toLowerCase();
+
+    const validPools = ['pump']; // Add other valid pools if needed
+    if (!validPools.includes(pool)) {
+      this.bot.sendMessage(
+        chatId,
+        '❌ Invalid pool name. Available pools: ' + validPools.join(', ')
+      );
+      return;
+    }
+
+    await this.settingsService.updateSetting('pool', pool);
+    this.bot.sendMessage(chatId, `✅ Pool updated to ${pool}`);
   }
 
   async handlePositions(msg) {

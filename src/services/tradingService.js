@@ -3,6 +3,7 @@ const { loadPositions, savePositions } = require('../utils/helpers');
 const bs58 = require('bs58');
 const { Connection, PublicKey } = require('@solana/web3.js');
 const { getAssociatedTokenAddress } = require('@solana/spl-token');
+const SettingsService = require('./settingsService');
 
 const API_HOST = 'https://gmgn.ai';
 const SOL_TOKEN = 'So11111111111111111111111111111111111111112';
@@ -10,20 +11,26 @@ const SOL_TOKEN = 'So11111111111111111111111111111111111111112';
 class TradingService {
   constructor(connection) {
     this.connection = connection;
+    this.settingsService = new SettingsService();
   }
 
   async buyToken(mint) {
     try {
+      // Get settings from database
+      const amount = await this.settingsService.getSetting('amount');
+      const slippage = await this.settingsService.getSetting('slippage');
+      const priorityFee = await this.settingsService.getSetting('priority_fee');
+
       // Step 1: Get quote and unsigned transaction
-      const amount = (Number(process.env.AMOUNT) * 1e9).toString();
+      const amountInLamports = (Number(amount) * 1e9).toString();
       const quoteUrl =
         `${API_HOST}/defi/router/v1/sol/tx/get_swap_route?` +
         `token_in_address=${SOL_TOKEN}&` +
         `token_out_address=${mint}&` +
-        `in_amount=${amount}&` +
+        `in_amount=${amountInLamports}&` +
         `from_address=${process.env.WALLET_PUBLIC_KEY}&` +
-        `slippage=${process.env.SLIPPAGE || 1}&` +
-        `fee=${process.env.PRIORITY_FEE || 0.006}`;
+        `slippage=${slippage || 1}&` +
+        `fee=${priorityFee || 0.006}`;
 
       console.log('Getting quote...');
       const routeResponse = await fetch(quoteUrl);
@@ -115,6 +122,10 @@ class TradingService {
 
   async sellToken(mint, percentage) {
     try {
+      // Get settings from database
+      const slippage = await this.settingsService.getSetting('slippage');
+      const priorityFee = await this.settingsService.getSetting('priority_fee');
+
       const positions = loadPositions();
       if (!positions[mint]) {
         return '❌ No position found for this token';
@@ -147,8 +158,8 @@ class TradingService {
         `token_out_address=${SOL_TOKEN}&` +
         `in_amount=${sellAmount}&` +
         `from_address=${process.env.WALLET_PUBLIC_KEY}&` +
-        `slippage=${process.env.SLIPPAGE || 1}&` +
-        `fee=${process.env.PRIORITY_FEE || 0.006}`;
+        `slippage=${slippage || 1}&` +
+        `fee=${priorityFee || 0.006}`;
 
       const routeResponse = await fetch(quoteUrl);
       const route = await routeResponse.json();

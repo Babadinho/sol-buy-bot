@@ -252,30 +252,26 @@ class TradingService {
     }
 
     try {
-      const requestOptions = {
-        method: 'GET',
-        headers: {
-          'X-API-KEY': process.env.BIRDEYE_API_KEY,
-          Accept: 'application/json',
-        },
-      };
-
       const response = await fetch(
-        `https://public-api.birdeye.so/public/token_list?address=${mint}`,
-        requestOptions
+        `https://solana-gateway.moralis.io/token/mainnet/${mint}/metadata`,
+        {
+          method: 'GET',
+          headers: {
+            accept: 'application/json',
+            'X-API-Key': process.env.MORALIS_API_KEY,
+          },
+        }
       );
 
       if (response.ok) {
         const data = await response.json();
-        if (data.success && data.data?.[0]) {
-          const tokenInfo = data.data[0];
-          return {
-            symbol: tokenInfo.symbol || 'Unknown',
-            name: tokenInfo.name || 'Unknown Token',
-          };
-        }
+        return {
+          symbol: data.symbol?.trim() || 'Unknown',
+          name: data.name?.trim() || 'Unknown Token',
+        };
       }
 
+      console.log('Moralis API error:', response.status);
       return {
         symbol: 'Unknown',
         name: 'Unknown Token',

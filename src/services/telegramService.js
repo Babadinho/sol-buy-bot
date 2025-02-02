@@ -81,8 +81,9 @@ Pool: ${process.env.POOL}
         : 'Unknown';
 
       const message = `
-🪙 Token: ${data.tokenName || mint}
-💰 Amount: ${actualAmount} tokens
+🪙 Token: ${data.symbol}
+📝 CA: ${mint}
+💰 Balance: ${actualAmount} tokens
 📅 Last transaction: ${new Date(data.timestamp).toLocaleString()}
 `;
 

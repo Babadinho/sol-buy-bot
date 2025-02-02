@@ -295,6 +295,52 @@ class TradingService {
       };
     }
   }
+
+  async updatePositions(currentPositions) {
+    try {
+      // Get all SPL tokens for the wallet
+      const response = await fetch(
+        `https://solana-gateway.moralis.io/account/mainnet/${process.env.WALLET_PUBLIC_KEY}/tokens`,
+        {
+          method: 'GET',
+          headers: {
+            accept: 'application/json',
+            'X-API-Key': process.env.MORALIS_API_KEY,
+          },
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const tokens = await response.json();
+      const updatedPositions = {};
+
+      // Update each token position
+      for (const token of tokens) {
+        const mint = token.mint;
+
+        // Keep existing data if available
+        const existingData = currentPositions[mint] || {};
+
+        updatedPositions[mint] = {
+          timestamp: existingData.timestamp || Date.now(), // Preserve existing timestamp
+          txHash: existingData.txHash || '',
+          tokenAmount: token.amountRaw || token.amount,
+          symbol: token.symbol || existingData.symbol || 'Unknown',
+          name: token.name || existingData.name || 'Unknown Token',
+        };
+      }
+
+      // Save updated positions
+      savePositions(updatedPositions);
+      return updatedPositions;
+    } catch (error) {
+      console.error('Error updating positions:', error);
+      throw new Error('Failed to update positions');
+    }
+  }
 }
 
 module.exports = TradingService;

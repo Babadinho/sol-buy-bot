@@ -56,6 +56,7 @@ class TelegramService {
       /\/setpool\s+(\w+)/,
       withAuth(this.handleSetPool.bind(this))
     );
+    this.bot.onText(/\/update/, withAuth(this.handleUpdate.bind(this)));
 
     // Protect callback queries and messages
     this.bot.on('callback_query', async (query) => {
@@ -97,6 +98,7 @@ Commands:
 /start - Show welcome message
 /positions - View current positions
 /settings - View current trading settings
+/update - Update positions
 /help - Show this help message
 
 To buy a token:
@@ -288,6 +290,33 @@ To change settings, use these commands:
       this.bot.sendMessage(
         chatId,
         '❌ Please send a valid Solana token contract address'
+      );
+    }
+  }
+
+  async handleUpdate(msg) {
+    const chatId = msg.chat.id;
+    this.bot.sendMessage(chatId, '🔄 Updating positions...');
+
+    try {
+      const positions = loadPositions();
+      const updatedPositions = await this.tradingService.updatePositions(
+        positions
+      );
+
+      if (Object.keys(updatedPositions).length === 0) {
+        this.bot.sendMessage(chatId, '📊 No positions to update');
+        return;
+      }
+
+      this.bot.sendMessage(chatId, '✅ Positions updated successfully!');
+      // Show updated positions
+      this.handlePositions(msg);
+    } catch (error) {
+      console.error('Update error:', error);
+      this.bot.sendMessage(
+        chatId,
+        `❌ Error updating positions: ${error.message}`
       );
     }
   }

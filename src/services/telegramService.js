@@ -11,23 +11,66 @@ class TelegramService {
     this.setupCommands();
   }
 
+  async checkAuthorization(msg, handler) {
+    const chatId = msg.chat.id;
+    const isAuthorized = await this.settingsService.isAuthorizedUser(chatId);
+
+    if (!isAuthorized) {
+      this.bot.sendMessage(
+        chatId,
+        '⛔️ Unauthorized access. This incident will be logged.'
+      );
+      console.log(
+        `Unauthorized access attempt from chat_id: ${chatId}, username: ${msg.from.username}`
+      );
+      return false;
+    }
+    return true;
+  }
+
   setupCommands() {
-    this.bot.onText(/\/start/, this.handleStart.bind(this));
-    this.bot.onText(/\/help/, this.handleHelp.bind(this));
-    this.bot.onText(/\/settings/, this.handleSettings.bind(this));
-    this.bot.onText(/\/positions/, this.handlePositions.bind(this));
+    // Wrap each command handler with authorization check
+    const withAuth = (handler) => async (msg, match) => {
+      if (await this.checkAuthorization(msg)) {
+        return handler(msg, match);
+      }
+    };
+
+    this.bot.onText(/\/start/, withAuth(this.handleStart.bind(this)));
+    this.bot.onText(/\/help/, withAuth(this.handleHelp.bind(this)));
+    this.bot.onText(/\/settings/, withAuth(this.handleSettings.bind(this)));
+    this.bot.onText(/\/positions/, withAuth(this.handlePositions.bind(this)));
     this.bot.onText(
       /\/setamount\s+(\d*\.?\d*)/,
-      this.handleSetAmount.bind(this)
+      withAuth(this.handleSetAmount.bind(this))
     );
     this.bot.onText(
       /\/setslippage\s+(\d*\.?\d*)/,
-      this.handleSetSlippage.bind(this)
+      withAuth(this.handleSetSlippage.bind(this))
     );
-    this.bot.onText(/\/setfee\s+(\d*\.?\d*)/, this.handleSetFee.bind(this));
-    this.bot.onText(/\/setpool\s+(\w+)/, this.handleSetPool.bind(this));
-    this.bot.on('callback_query', this.handleCallbackQuery.bind(this));
-    this.bot.on('message', this.handleMessage.bind(this));
+    this.bot.onText(
+      /\/setfee\s+(\d*\.?\d*)/,
+      withAuth(this.handleSetFee.bind(this))
+    );
+    this.bot.onText(
+      /\/setpool\s+(\w+)/,
+      withAuth(this.handleSetPool.bind(this))
+    );
+
+    // Protect callback queries and messages
+    this.bot.on('callback_query', async (query) => {
+      if (
+        await this.checkAuthorization({ chat: { id: query.message.chat.id } })
+      ) {
+        this.handleCallbackQuery(query);
+      }
+    });
+
+    this.bot.on('message', async (msg) => {
+      if (await this.checkAuthorization(msg)) {
+        this.handleMessage(msg);
+      }
+    });
   }
 
   async handleStart(msg) {

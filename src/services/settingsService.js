@@ -9,44 +9,64 @@ class SettingsService {
 
   async initializeDatabase() {
     return new Promise((resolve, reject) => {
-      this.db.run(
-        `
-        CREATE TABLE IF NOT EXISTS settings (
-          key TEXT PRIMARY KEY,
-          value TEXT NOT NULL
-        )
-      `,
-        (err) => {
-          if (err) {
-            reject(err);
-            return;
-          }
+      this.db.serialize(() => {
+        // Create settings table
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+          )
+        `);
 
-          // Initialize default settings if they don't exist
-          const defaultSettings = {
-            amount: process.env.AMOUNT || '0.1',
-            slippage: process.env.SLIPPAGE || '15',
-            priority_fee: process.env.PRIORITY_FEE || '0.00001',
-            pool: process.env.POOL || 'pump',
-          };
+        // Create authorized users table
+        this.db.run(`
+          CREATE TABLE IF NOT EXISTS authorized_users (
+            chat_id TEXT PRIMARY KEY,
+            username TEXT,
+            added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
 
-          // Use Promise.all to wait for all insertions to complete
-          const promises = Object.entries(defaultSettings).map(
-            ([key, value]) => {
-              return new Promise((resolveInsert, rejectInsert) => {
-                this.db.run(
-                  'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
-                  [key, value],
-                  (err) => {
-                    if (err) rejectInsert(err);
-                    else resolveInsert();
-                  }
-                );
-              });
-            }
-          );
+        // Initialize default settings
+        const defaultSettings = {
+          amount: process.env.AMOUNT || '0.1',
+          slippage: process.env.SLIPPAGE || '15',
+          priority_fee: process.env.PRIORITY_FEE || '0.00001',
+          pool: process.env.POOL || 'pump',
+        };
 
-          Promise.all(promises).then(resolve).catch(reject);
+        const promises = Object.entries(defaultSettings).map(([key, value]) => {
+          return new Promise((resolveInsert, rejectInsert) => {
+            this.db.run(
+              'INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)',
+              [key, value],
+              (err) => {
+                if (err) rejectInsert(err);
+                else resolveInsert();
+              }
+            );
+          });
+        });
+
+        // Add your Telegram chat_id as the initial authorized user
+        this.db.run(
+          'INSERT OR IGNORE INTO authorized_users (chat_id, username) VALUES (?, ?)',
+          [process.env.ADMIN_CHAT_ID, process.env.ADMIN_USERNAME]
+        );
+
+        Promise.all(promises).then(resolve).catch(reject);
+      });
+    });
+  }
+
+  async isAuthorizedUser(chatId) {
+    return new Promise((resolve, reject) => {
+      this.db.get(
+        'SELECT chat_id FROM authorized_users WHERE chat_id = ?',
+        [chatId],
+        (err, row) => {
+          if (err) reject(err);
+          resolve(!!row);
         }
       );
     });

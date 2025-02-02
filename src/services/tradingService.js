@@ -82,7 +82,8 @@ class TradingService {
         if (status.data.success === true) {
           const positions = loadPositions();
           const existingAmount = positions[mint]?.tokenAmount || '0';
-          const metadata = await this.getTokenMetadata(mint);
+          const metadata = await this.getTokenMetadata(mint, positions);
+          console.log(metadata);
           positions[mint] = {
             timestamp: Date.now(),
             txHash: hash,
@@ -209,7 +210,9 @@ class TradingService {
             const remainingAmount = (
               BigInt(totalAmount) - BigInt(sellAmount)
             ).toString();
-            const metadata = await this.getTokenMetadata(mint);
+            const metadata = positions[mint].symbol
+              ? { symbol: positions[mint].symbol, name: positions[mint].name }
+              : await this.getTokenMetadata(mint, positions);
             positions[mint] = {
               ...positions[mint],
               timestamp: Date.now(),
@@ -239,39 +242,38 @@ class TradingService {
     }
   }
 
-  async getTokenMetadata(mint) {
+  async getTokenMetadata(mint, positions) {
+    // First check if we already have the metadata in positions
+    if (positions[mint]?.symbol && positions[mint]?.name) {
+      return {
+        symbol: positions[mint].symbol,
+        name: positions[mint].name,
+      };
+    }
+
     try {
       const requestOptions = {
         method: 'GET',
         headers: {
-          token: process.env.SOLSCAN_API_KEY,
+          'X-API-KEY': process.env.BIRDEYE_API_KEY,
           Accept: 'application/json',
         },
       };
 
-      const solscanResponse = await fetch(
-        `https://pro-api.solscan.io/v2.0/token/meta?address=${mint}`,
+      const response = await fetch(
+        `https://public-api.birdeye.so/public/token_list?address=${mint}`,
         requestOptions
       );
 
-      if (solscanResponse.ok) {
-        const data = await solscanResponse.json();
-        if (data && data.data) {
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.data?.[0]) {
+          const tokenInfo = data.data[0];
           return {
-            symbol: data.data.symbol || 'Unknown',
-            name: data.data.name || 'Unknown Token',
+            symbol: tokenInfo.symbol || 'Unknown',
+            name: tokenInfo.name || 'Unknown Token',
           };
         }
-      } else {
-        console.log('Solscan API error:', await solscanResponse.text());
-      }
-
-      // Fallback to hardcoded values for known tokens
-      if (mint === '7kJejVVe6wRj1RiLTjZM54dNxTY1DPV6iE89VzN7pump') {
-        return {
-          symbol: 'PUMP',
-          name: 'PUMP Token',
-        };
       }
 
       return {
@@ -280,12 +282,6 @@ class TradingService {
       };
     } catch (error) {
       console.log('Error fetching token metadata:', error);
-      if (mint === '7kJejVVe6wRj1RiLTjZM54dNxTY1DPV6iE89VzN7pump') {
-        return {
-          symbol: 'PUMP',
-          name: 'PUMP Token',
-        };
-      }
       return {
         symbol: 'Unknown',
         name: 'Unknown Token',

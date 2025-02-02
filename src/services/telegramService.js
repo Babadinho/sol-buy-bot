@@ -95,6 +95,7 @@ Need help? Use /help command
 
 Commands:
 /start - Show welcome message
+/positions - View current positions
 /settings - View current trading settings
 /help - Show this help message
 

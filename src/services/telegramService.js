@@ -269,17 +269,22 @@ To change settings, use these commands:
   async handleMessage(msg) {
     const chatId = msg.chat.id;
 
+    // Skip if message has no text
+    if (!msg.text) {
+      return;
+    }
+
     // Skip if it's a command
-    if (msg.text && msg.text.startsWith('/')) {
+    if (msg.text.startsWith('/')) {
       return;
     }
 
     // Check if the message is a contract address
-    if (msg.text && this.isValidSolanaAddress(msg.text)) {
+    if (this.isValidSolanaAddress(msg.text)) {
       this.bot.sendMessage(chatId, '🚀 Processing buy order...');
       const result = await this.tradingService.buyToken(msg.text);
       this.bot.sendMessage(chatId, result);
-    } else if (!msg.text.startsWith('/')) {
+    } else {
       this.bot.sendMessage(
         chatId,
         '❌ Please send a valid Solana token contract address'

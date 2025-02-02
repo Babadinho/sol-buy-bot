@@ -311,7 +311,7 @@ To change settings, use these commands:
 
       this.bot.sendMessage(chatId, '✅ Positions updated successfully!');
       // Show updated positions
-      this.handlePositions(msg);
+      // this.handlePositions(msg);
     } catch (error) {
       console.error('Update error:', error);
       this.bot.sendMessage(
